@@ -1037,10 +1037,10 @@ export class AccountService {
         };
       }
 
-      if (!emailMatch && activeName === name && this.snapshotsShareEmail(existingSnapshot, incomingSnapshot)) {
+      if (!emailMatch && this.snapshotsShareEmail(existingSnapshot, incomingSnapshot)) {
         emailMatch = {
           name,
-          source: "active",
+          source: activeName === name ? "active" : "existing",
           forceOverwrite: true,
         };
       }
@@ -1070,12 +1070,11 @@ export class AccountService {
 
       if (
         !activeEmailMatch &&
-        activeName === name &&
         this.registryEntrySharesEmail(entry, incomingSnapshot)
       ) {
         activeEmailMatch = {
           name,
-          source: "active",
+          source: activeName === name ? "active" : "existing",
           forceOverwrite: true,
         };
       }
