@@ -223,7 +223,7 @@ test("inferAccountNameFromCurrentAuth returns email-shaped duplicate suffix for 
   });
 });
 
-test("resolveLoginAccountNameFromCurrentAuth creates an email-shaped duplicate when canonical email snapshot identity differs", async (t) => {
+test("resolveLoginAccountNameFromCurrentAuth refreshes the canonical email snapshot when only accountId differs", async (t) => {
   await withIsolatedCodexDir(t, async ({ accountsDir, authPath }) => {
     const service = new AccountService();
     const email = "csoves@edixai.com";
@@ -247,8 +247,9 @@ test("resolveLoginAccountNameFromCurrentAuth creates an email-shaped duplicate w
 
     const resolved = await service.resolveLoginAccountNameFromCurrentAuth();
     assert.deepEqual(resolved, {
-      name: `${email}--dup-2`,
-      source: "inferred",
+      name: email,
+      source: "existing",
+      forceOverwrite: true,
     });
   });
 });
@@ -1140,6 +1141,80 @@ test("restoreSessionSnapshotIfNeeded materializes matching auth symlink before c
     const snapshotAfterLogin = await parseAuthSnapshotFile(snapshotPath);
     assert.equal(snapshotAfterLogin.email, activeName);
     assert.equal(snapshotAfterLogin.accountId, "acct-admin");
+  });
+});
+
+test("restoreSessionSnapshotIfNeeded materializes the auth symlink even when no session is pinned", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("symlink conversion behavior is Unix-specific in this test");
+    return;
+  }
+
+  await withIsolatedCodexDir(t, async ({ codexDir, accountsDir, authPath }) => {
+    const service = new AccountService();
+    const activeName = "kreta@lebenyse.hu";
+    const snapshotPath = path.join(accountsDir, `${activeName}.json`);
+    const currentPath = path.join(codexDir, "current");
+
+    process.env.CODEX_AUTH_SESSION_KEY = "restore-no-session-pin";
+    process.env.CODEX_AUTH_SESSION_ACTIVE_OVERRIDE = "1";
+
+    await fsp.writeFile(
+      snapshotPath,
+      buildAuthPayload(activeName, {
+        accountId: "acct-kreta",
+        userId: "user-kreta",
+        tokenSeed: "kreta-original",
+      }),
+      "utf8",
+    );
+    await fsp.writeFile(currentPath, `${activeName}\n`, "utf8");
+    await fsp.symlink(snapshotPath, authPath);
+
+    const restored = await service.restoreSessionSnapshotIfNeeded();
+    assert.deepEqual(restored, { restored: false });
+
+    const authStat = await fsp.lstat(authPath);
+    assert.equal(authStat.isSymbolicLink(), false);
+
+    // Simulate `codex login` overwriting auth.json with a different account.
+    await fsp.writeFile(
+      authPath,
+      buildAuthPayload("admin@kollarrobert.sk", {
+        accountId: "acct-admin",
+        userId: "user-admin",
+        tokenSeed: "admin-login",
+      }),
+      "utf8",
+    );
+
+    const previousSnapshot = await parseAuthSnapshotFile(snapshotPath);
+    assert.equal(previousSnapshot.email, activeName);
+    assert.equal(previousSnapshot.accountId, "acct-kreta");
+  });
+});
+
+test("listAccountNames excludes the update-check cache file", async (t) => {
+  await withIsolatedCodexDir(t, async ({ accountsDir }) => {
+    const service = new AccountService();
+    await fsp.writeFile(
+      path.join(accountsDir, "alice@example.com.json"),
+      buildAuthPayload("alice@example.com"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(accountsDir, "update-check.json"),
+      JSON.stringify({
+        version: 1,
+        packageName: "@imdeadpool/codex-account-switcher",
+        latestVersion: "0.1.23",
+        checkedAt: 1778696332060,
+      }),
+      "utf8",
+    );
+
+    const names = await service.listAccountNames();
+    assert.deepEqual(names, ["alice@example.com"]);
   });
 });
 

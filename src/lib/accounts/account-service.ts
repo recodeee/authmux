@@ -195,6 +195,16 @@ export class AccountService {
   }
 
   public async restoreSessionSnapshotIfNeeded(): Promise<{ restored: boolean; accountName?: string }> {
+    // Materialize the auth symlink up front, before any early returns. Older
+    // installations (and stray `ln -s` setups) can leave ~/.codex/auth.json as
+    // a symlink into accounts/<name>.json; if the upcoming `codex login` writes
+    // through that symlink, it overwrites the saved snapshot for the previous
+    // account and we lose it.
+    const authPath = resolveAuthPath();
+    if (await this.pathExists(authPath)) {
+      await this.materializeAuthSymlink(authPath);
+    }
+
     const sessionAccountName = await this.getActiveSessionAccountName();
     if (!sessionAccountName) {
       return { restored: false };
@@ -206,9 +216,7 @@ export class AccountService {
       return { restored: false };
     }
 
-    const authPath = resolveAuthPath();
     if (await this.pathExists(authPath)) {
-      await this.materializeAuthSymlink(authPath);
       const [sessionSnapshot, activeSnapshot] = await Promise.all([
         parseAuthSnapshotFile(snapshotPath),
         parseAuthSnapshotFile(authPath),
@@ -247,6 +255,7 @@ export class AccountService {
           entry.isFile() &&
           entry.name.endsWith(".json") &&
           entry.name !== "registry.json" &&
+          entry.name !== "update-check.json" &&
           entry.name !== sessionMapBasename,
       )
       .map((entry) => entry.name.replace(/\.json$/i, ""))
