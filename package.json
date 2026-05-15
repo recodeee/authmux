@@ -1,6 +1,6 @@
 {
   "name": "@imdeadpool/codex-account-switcher",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "description": "A command-line tool that lets you manage and switch between multiple Codex accounts instantly, no more constant logins and logouts.",
   "license": "MIT",
   "bin": {
