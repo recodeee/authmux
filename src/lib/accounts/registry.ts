@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { resolveRegistryPath } from "../config/paths";
 import { secureWriteFile, SECURE_DIR_MODE } from "../io/secure-fs";
+import { withRegistryLock } from "../../infra/fs/registry-lock";
 import {
   AccountRegistryEntry,
   DEFAULT_THRESHOLD_5H_PERCENT,
@@ -153,6 +154,51 @@ export async function saveRegistry(registry: RegistryData): Promise<void> {
   const registryPath = resolveRegistryPath();
   await fsp.mkdir(path.dirname(registryPath), { recursive: true, mode: SECURE_DIR_MODE });
   await secureWriteFile(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+}
+
+/**
+ * Merge a freshly-reloaded on-disk registry with the caller's in-memory copy.
+ *
+ * Accounts: union of fresh + incoming. If both have the same name, incoming
+ *           wins (the caller is the active mutator for that entry).
+ * activeAccountName, autoSwitch, api: incoming wins (caller is the explicit
+ *           writer for these globals).
+ * version: always 1.
+ *
+ * This is the minimal correctness primitive that lets two writers serialize
+ * through `withRegistryLock` without silently dropping account entries the
+ * other writer added between load and lock-acquire.
+ */
+export function mergeRegistry(fresh: RegistryData, incoming: RegistryData): RegistryData {
+  const mergedAccounts: Record<string, AccountRegistryEntry> = { ...fresh.accounts };
+  for (const [name, entry] of Object.entries(incoming.accounts)) {
+    mergedAccounts[name] = entry;
+  }
+  return {
+    version: 1,
+    autoSwitch: incoming.autoSwitch,
+    api: incoming.api,
+    activeAccountName: incoming.activeAccountName,
+    accounts: mergedAccounts,
+  };
+}
+
+/**
+ * Single durable write path for the registry.
+ *
+ * Acquires the registry lock, reloads the on-disk state under the lock,
+ * merges the caller's mutations on top, and writes the result atomically.
+ * Returns the merged registry that was actually written, so callers can
+ * refresh their in-memory cache.
+ */
+export async function persistRegistryAtomic(incoming: RegistryData): Promise<RegistryData> {
+  return withRegistryLock(async () => {
+    const fresh = await loadRegistry();
+    const base = fresh.version === 1 ? fresh : createDefaultRegistry();
+    const merged = mergeRegistry(base, incoming);
+    await saveRegistry(merged);
+    return merged;
+  });
 }
 
 export function reconcileRegistryWithAccounts(registry: RegistryData, accountNames: string[]): RegistryData {

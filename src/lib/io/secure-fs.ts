@@ -1,6 +1,6 @@
 import fsp from "node:fs/promises";
-import path from "node:path";
-import crypto from "node:crypto";
+
+import { atomicWriteFile } from "../../infra/fs/atomic-write";
 
 export const SECURE_FILE_MODE = 0o600;
 export const SECURE_DIR_MODE = 0o700;
@@ -18,37 +18,12 @@ export async function ensureSecureDir(dirPath: string): Promise<void> {
   }
 }
 
+/**
+ * Atomic, fsync-durable write with 0600 perms applied BEFORE rename.
+ * Thin wrapper over `atomicWriteFile`; kept for call-site compatibility.
+ */
 export async function secureWriteFile(filePath: string, data: string | Buffer): Promise<void> {
-  const dir = path.dirname(filePath);
-  const tmp = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`);
-  const handle = await fsp.open(tmp, "w", SECURE_FILE_MODE);
-  try {
-    if (typeof data === "string") {
-      await handle.writeFile(data, "utf8");
-    } else {
-      await handle.writeFile(data);
-    }
-    await handle.sync().catch(() => {
-      // fsync can fail on some FS; not fatal for our durability goals
-    });
-  } finally {
-    await handle.close();
-  }
-  if (!IS_WINDOWS) {
-    try {
-      await fsp.chmod(tmp, SECURE_FILE_MODE);
-    } catch {
-      // ignore
-    }
-  }
-  await fsp.rename(tmp, filePath);
-  if (!IS_WINDOWS) {
-    try {
-      await fsp.chmod(filePath, SECURE_FILE_MODE);
-    } catch {
-      // ignore
-    }
-  }
+  await atomicWriteFile(filePath, data, { mode: SECURE_FILE_MODE });
 }
 
 export async function chmodSecureFile(filePath: string): Promise<void> {

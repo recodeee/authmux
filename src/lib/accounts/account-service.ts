@@ -22,8 +22,8 @@ import { parseAuthSnapshotFile } from "./auth-parser";
 import {
   createDefaultRegistry,
   loadRegistry,
+  persistRegistryAtomic,
   reconcileRegistryWithAccounts,
-  saveRegistry,
 } from "./registry";
 import {
   AccountMapping,
@@ -470,7 +470,7 @@ export class AccountService {
     const registry = await loadRegistry();
     await this.hydrateSnapshotMetadataIfMissing(registry, resolvedName);
     registry.activeAccountName = resolvedName;
-    await saveRegistry(registry);
+    await this.persistRegistry(registry);
 
     return resolvedName;
   }
@@ -1302,7 +1302,7 @@ export class AccountService {
 
   private async persistRegistry(registry: RegistryData): Promise<void> {
     const reconciled = reconcileRegistryWithAccounts(registry, await this.listAccountNames());
-    await saveRegistry(reconciled);
+    await persistRegistryAtomic(reconciled);
   }
 
   private async activateSnapshot(accountName: string): Promise<void> {
