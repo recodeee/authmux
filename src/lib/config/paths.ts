@@ -59,9 +59,40 @@ export function resolveSnapshotBackupDir(): string {
   return path.join(resolveAccountsDir(), ".snapshot-backups");
 }
 
+/**
+ * @deprecated Use {@link resolveCodexDir} — this constant is evaluated at
+ * module import time, so env-var overrides (`CODEX_AUTH_CODEX_DIR`, `HOME`)
+ * set after the first `import` have no effect. Scheduled for removal in
+ * v0.2.0 (Theme N4, `docs/future/17-ROADMAP.md`).
+ */
 export const codexDir: string = resolveCodexDir();
+/**
+ * @deprecated Use {@link resolveAccountsDir} — eager binding ignores
+ * env-var overrides set after import. Scheduled for removal in v0.2.0
+ * (Theme N4, `docs/future/17-ROADMAP.md`).
+ */
 export const accountsDir: string = resolveAccountsDir();
+/**
+ * @deprecated Use {@link resolveAuthPath} — eager binding ignores env-var
+ * overrides set after import. Scheduled for removal in v0.2.0 (Theme N4,
+ * `docs/future/17-ROADMAP.md`).
+ */
 export const authPath: string = resolveAuthPath();
+/**
+ * @deprecated Use {@link resolveCurrentNamePath} — eager binding ignores
+ * env-var overrides set after import. Scheduled for removal in v0.2.0
+ * (Theme N4, `docs/future/17-ROADMAP.md`).
+ */
 export const currentNamePath: string = resolveCurrentNamePath();
+/**
+ * @deprecated Use {@link resolveRegistryPath} — eager binding ignores
+ * env-var overrides set after import. Scheduled for removal in v0.2.0
+ * (Theme N4, `docs/future/17-ROADMAP.md`).
+ */
 export const registryPath: string = resolveRegistryPath();
+/**
+ * @deprecated Use {@link resolveSessionMapPath} — eager binding ignores
+ * env-var overrides set after import. Scheduled for removal in v0.2.0
+ * (Theme N4, `docs/future/17-ROADMAP.md`).
+ */
 export const sessionMapPath: string = resolveSessionMapPath();
