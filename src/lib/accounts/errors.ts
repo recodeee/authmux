@@ -21,7 +21,8 @@ export type ErrorCode =
   | "E_SNAPSHOT_CLOBBERED"
   | "E_DAEMON_UNSUPPORTED_OS"
   | "E_PROVIDER_NOT_INSTALLED"
-  | "E_USAGE_FETCH_FAILED";
+  | "E_USAGE_FETCH_FAILED"
+  | "E_PROXY_INSECURE_URL";
 
 export type ErrorSeverity = "fatal" | "warn" | "info";
 
@@ -197,5 +198,21 @@ export class AmbiguousAccountQueryError extends CodexAuthError {
 export class AutoSwitchConfigError extends CodexAuthError {
   constructor(message: string) {
     super(message, "E_AUTOSWITCH_CONFIG", "fatal");
+  }
+}
+
+export class ProxyInsecureUrlError extends CodexAuthError {
+  constructor(url: string, hostname: string) {
+    super(
+      `Refusing to send dashboard credentials to non-loopback proxy URL "${url}" ` +
+        `(host="${hostname}"). The proxy auth flow only runs against loopback ` +
+        `(127.0.0.0/8, ::1, localhost). Set AUTHMUX_PROXY_INSECURE=1 to override ` +
+        `temporarily; the override will be removed in the next minor release.`,
+      "E_PROXY_INSECURE_URL",
+      "fatal",
+      `Point CODEX_LB_URL / CODEX_LB_DASHBOARD_URL at a loopback address, ` +
+        `or set AUTHMUX_PROXY_INSECURE=1 to acknowledge the risk.`,
+      { url, hostname },
+    );
   }
 }

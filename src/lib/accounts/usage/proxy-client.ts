@@ -1,20 +1,26 @@
-import { exec as execCallback } from "node:child_process";
-import fsp from "node:fs/promises";
-import path from "node:path";
-import { promisify } from "node:util";
-import { ParsedAuthSnapshot, RateLimitWindow, UsageSnapshot } from "./types";
+// Localhost dashboard proxy client (Codex LB). Owns its own session,
+// password env, TOTP helper, and retry profile. Extracted from
+// `accounts/usage.ts` in Theme X2 with one hardening change: by default
+// the client refuses to send credentials to non-loopback URLs. Set
+// `AUTHMUX_PROXY_INSECURE=1` to opt back into the legacy behavior for
+// one minor release.
 
-const USAGE_ENDPOINT = "https://chatgpt.com/backend-api/wham/usage";
+import { exec as execCallback } from "node:child_process";
+import { promisify } from "node:util";
+import { ProxyInsecureUrlError } from "../errors";
+import { RateLimitWindow, UsageSnapshot } from "../types";
+
 const DEFAULT_PROXY_URL = "http://127.0.0.1:2455";
 const DASHBOARD_SESSION_PATH = "/api/dashboard-auth/session";
 const PASSWORD_LOGIN_PATH = "/api/dashboard-auth/password/login";
 const TOTP_VERIFY_PATH = "/api/dashboard-auth/totp/verify";
 const ACCOUNTS_PATH = "/api/accounts";
-const REQUEST_TIMEOUT_MS = 5000;
 const PROXY_REQUEST_TIMEOUT_MS = 2000;
 const DASHBOARD_PASSWORD_ENV = "CODEX_LB_DASHBOARD_PASSWORD";
 const DASHBOARD_TOTP_CODE_ENV = "CODEX_LB_DASHBOARD_TOTP_CODE";
 const DASHBOARD_TOTP_COMMAND_ENV = "CODEX_LB_DASHBOARD_TOTP_COMMAND";
+const PROXY_URL_ENVS = ["CODEX_LB_DASHBOARD_URL", "CODEX_LB_URL"] as const;
+const PROXY_INSECURE_OVERRIDE_ENV = "AUTHMUX_PROXY_INSECURE";
 
 const execAsync = promisify(execCallback);
 
@@ -69,66 +75,11 @@ type ProxyAccountsPayload = {
   accounts?: unknown;
 };
 
-function coerceWindow(raw: unknown): RateLimitWindow | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-
-  const value = raw as Record<string, unknown>;
-  const usedRaw = value.used_percent;
-  if (typeof usedRaw !== "number" || !Number.isFinite(usedRaw)) return undefined;
-
-  const windowMinutes = typeof value.window_minutes === "number"
-    ? Math.round(value.window_minutes)
-    : typeof value.limit_window_seconds === "number"
-      ? Math.ceil(value.limit_window_seconds / 60)
-      : undefined;
-
-  const resetsAt = typeof value.resets_at === "number"
-    ? Math.round(value.resets_at)
-    : typeof value.reset_at === "number"
-      ? Math.round(value.reset_at)
-      : undefined;
-
-  return {
-    usedPercent: Math.max(0, Math.min(100, usedRaw)),
-    windowMinutes,
-    resetsAt,
-  };
-}
-
-function buildSnapshotFromRateLimits(rateLimits: unknown, source: UsageSnapshot["source"]): UsageSnapshot | null {
-  if (!rateLimits || typeof rateLimits !== "object") return null;
-  const input = rateLimits as Record<string, unknown>;
-
-  const primary = coerceWindow(input.primary_window ?? input.primary);
-  const secondary = coerceWindow(input.secondary_window ?? input.secondary);
-  if (!primary && !secondary) return null;
-
-  const planType = typeof input.plan_type === "string" ? input.plan_type : undefined;
-  return {
-    primary,
-    secondary,
-    planType,
-    fetchedAt: new Date().toISOString(),
-    source,
-  };
-}
-
-function findNestedRateLimits(input: unknown): unknown {
-  if (!input || typeof input !== "object") return null;
-  const root = input as Record<string, unknown>;
-  if (root.rate_limits) return root.rate_limits;
-  if (root.payload && typeof root.payload === "object") {
-    const payload = root.payload as Record<string, unknown>;
-    if (payload.rate_limits) return payload.rate_limits;
-    if (payload.event && typeof payload.event === "object") {
-      const event = payload.event as Record<string, unknown>;
-      if (event.rate_limits) return event.rate_limits;
-    }
+function parseOptionalTimestampSeconds(input: unknown): number | undefined {
+  if (input === undefined || input === null || input === "") {
+    return undefined;
   }
-  return null;
-}
 
-function parseTimestampSeconds(input: unknown): number {
   if (typeof input === "number" && Number.isFinite(input)) {
     if (input > 1_000_000_000_000) {
       return Math.floor(input / 1000);
@@ -144,14 +95,6 @@ function parseTimestampSeconds(input: unknown): number {
   }
 
   return Math.floor(Date.now() / 1000);
-}
-
-function parseOptionalTimestampSeconds(input: unknown): number | undefined {
-  if (input === undefined || input === null || input === "") {
-    return undefined;
-  }
-
-  return parseTimestampSeconds(input);
 }
 
 function coerceRemainingPercent(remainingRaw: unknown): number | undefined {
@@ -231,7 +174,11 @@ function buildProxyAccountRecord(payload: ProxyAccountPayload): ProxyAccountReco
   };
 }
 
-function storeUsageIndexEntry(map: Map<string, UsageSnapshot>, rawKey: string | undefined, usage: UsageSnapshot): void {
+function storeUsageIndexEntry(
+  map: Map<string, UsageSnapshot>,
+  rawKey: string | undefined,
+  usage: UsageSnapshot,
+): void {
   const normalized = normalizeLookupKey(rawKey);
   if (!normalized || map.has(normalized)) {
     return;
@@ -424,17 +371,97 @@ async function ensureDashboardSession(client: DashboardProxyClient): Promise<boo
   return Boolean(finalState?.authenticated);
 }
 
-function resolveProxyBaseUrl(): string | null {
-  const raw = process.env.CODEX_LB_URL?.trim() || DEFAULT_PROXY_URL;
-  try {
-    const url = new URL(raw);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return null;
+/**
+ * Resolve the configured proxy URL from env vars at call time (N4 lazy
+ * path resolution: no module-level capture). Returns the raw URL string
+ * even if it is non-loopback — the loopback gate lives in
+ * `assertLoopbackOrAllowed`.
+ */
+function resolveRawProxyUrl(): string {
+  for (const name of PROXY_URL_ENVS) {
+    const raw = process.env[name]?.trim();
+    if (raw) {
+      return raw;
     }
-    return url.toString();
+  }
+  return DEFAULT_PROXY_URL;
+}
+
+/**
+ * Loopback check. Accepts:
+ *   - 127.0.0.0/8 (any 127.x.x.x literal)
+ *   - ::1
+ *   - localhost (case-insensitive)
+ *   - IPv4-mapped loopback ([::ffff:127.x.x.x])
+ *
+ * Anything else is treated as non-loopback. Hostnames that resolve via
+ * DNS to a loopback address are NOT trusted — only literal addresses /
+ * `localhost`. The proxy auth flow is single-machine by design.
+ */
+function isLoopbackHostname(hostname: string): boolean {
+  if (!hostname) return false;
+
+  // `URL` parses IPv6 hosts wrapped in `[…]`; strip the brackets first.
+  const bare = hostname.startsWith("[") && hostname.endsWith("]")
+    ? hostname.slice(1, -1)
+    : hostname;
+  const lower = bare.toLowerCase();
+
+  if (lower === "localhost") return true;
+  if (lower === "::1") return true;
+
+  // IPv4-mapped IPv6 loopback, e.g. `::ffff:127.0.0.1`.
+  if (lower.startsWith("::ffff:")) {
+    return isLoopbackHostname(lower.slice("::ffff:".length));
+  }
+
+  // 127.x.x.x literal. Must be exactly four numeric octets.
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(lower)) {
+    const octets = lower.split(".").map((octet) => Number(octet));
+    if (octets.some((value) => value < 0 || value > 255)) return false;
+    return octets[0] === 127;
+  }
+
+  return false;
+}
+
+function isInsecureOverrideEnabled(): boolean {
+  return process.env[PROXY_INSECURE_OVERRIDE_ENV]?.trim() === "1";
+}
+
+/**
+ * Parse + gate the proxy URL. On insecure URL:
+ *   - default: throw `ProxyInsecureUrlError`
+ *   - with `AUTHMUX_PROXY_INSECURE=1`: emit a process warning and proceed
+ *
+ * Returns the normalized URL string when allowed, or throws/returns null:
+ *   - returns `null` when the URL is unparseable or protocol is unsupported
+ *   - throws `ProxyInsecureUrlError` when non-loopback and override is off
+ */
+function resolveProxyBaseUrl(): string | null {
+  const raw = resolveRawProxyUrl();
+  let url: URL;
+  try {
+    url = new URL(raw);
   } catch {
     return null;
   }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return null;
+  }
+
+  if (!isLoopbackHostname(url.hostname)) {
+    if (!isInsecureOverrideEnabled()) {
+      throw new ProxyInsecureUrlError(url.toString(), url.hostname);
+    }
+    process.emitWarning(
+      "Proxy non-loopback URL allowed — credentials sent over non-loopback. " +
+        "Will be hard-blocked next release.",
+    );
+  }
+
+  return url.toString();
 }
 
 export async function fetchUsageFromProxy(): Promise<ProxyUsageIndex | null> {
@@ -484,177 +511,8 @@ export async function fetchUsageFromProxy(): Promise<ProxyUsageIndex | null> {
   return index;
 }
 
-export function resolveRateWindow(snapshot: UsageSnapshot | undefined, minutes: number, fallbackPrimary: boolean): RateLimitWindow | undefined {
-  if (!snapshot) return undefined;
-
-  if (snapshot.primary && snapshot.primary.windowMinutes === minutes) {
-    return snapshot.primary;
-  }
-
-  if (snapshot.secondary && snapshot.secondary.windowMinutes === minutes) {
-    return snapshot.secondary;
-  }
-
-  return fallbackPrimary ? snapshot.primary : snapshot.secondary;
-}
-
-export function remainingPercent(window: RateLimitWindow | undefined, nowSeconds: number): number | undefined {
-  if (!window) return undefined;
-  if (typeof window.resetsAt === "number" && window.resetsAt <= nowSeconds) return 100;
-
-  const remaining = 100 - window.usedPercent;
-  if (remaining <= 0) return 0;
-  if (remaining >= 100) return 100;
-  return Math.trunc(remaining);
-}
-
-export function usageScore(snapshot: UsageSnapshot | undefined, nowSeconds: number): number | undefined {
-  const fiveHour = remainingPercent(resolveRateWindow(snapshot, 300, true), nowSeconds);
-  const weekly = remainingPercent(resolveRateWindow(snapshot, 10080, false), nowSeconds);
-
-  if (typeof fiveHour === "number" && typeof weekly === "number") return Math.min(fiveHour, weekly);
-  if (typeof fiveHour === "number") return fiveHour;
-  if (typeof weekly === "number") return weekly;
-  return undefined;
-}
-
-export function shouldSwitchCurrent(
-  snapshot: UsageSnapshot | undefined,
-  thresholds: { threshold5hPercent: number; thresholdWeeklyPercent: number },
-  nowSeconds: number,
-): boolean {
-  const remaining5h = remainingPercent(resolveRateWindow(snapshot, 300, true), nowSeconds);
-  const remainingWeekly = remainingPercent(resolveRateWindow(snapshot, 10080, false), nowSeconds);
-
-  return (
-    (typeof remaining5h === "number" && remaining5h < thresholds.threshold5hPercent) ||
-    (typeof remainingWeekly === "number" && remainingWeekly < thresholds.thresholdWeeklyPercent)
-  );
-}
-
-export async function fetchUsageFromApi(snapshotInfo: ParsedAuthSnapshot): Promise<UsageSnapshot | null> {
-  if (snapshotInfo.authMode !== "chatgpt" || !snapshotInfo.accessToken || !snapshotInfo.accountId) {
-    return null;
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const response = await fetch(USAGE_ENDPOINT, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${snapshotInfo.accessToken}`,
-        "ChatGPT-Account-Id": snapshotInfo.accountId,
-        "User-Agent": "authmux",
-      },
-      signal: controller.signal,
-    });
-
-    if (!response.ok) return null;
-
-    const data = (await response.json()) as Record<string, unknown>;
-    const snapshot = buildSnapshotFromRateLimits(data.rate_limit, "api");
-    if (!snapshot) return null;
-
-    if (!snapshot.planType && typeof data.plan_type === "string") {
-      snapshot.planType = data.plan_type;
-    }
-
-    return snapshot;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function collectRolloutFiles(sessionsDir: string): Promise<string[]> {
-  const pending: string[] = [sessionsDir];
-  const rolloutFiles: Array<{ filePath: string; mtimeMs: number }> = [];
-
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current) continue;
-
-    let entries;
-    try {
-      entries = await fsp.readdir(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        pending.push(fullPath);
-        continue;
-      }
-
-      if (!entry.isFile()) continue;
-      if (!entry.name.startsWith("rollout-") || !entry.name.endsWith(".jsonl")) continue;
-
-      try {
-        const stat = await fsp.stat(fullPath);
-        rolloutFiles.push({ filePath: fullPath, mtimeMs: stat.mtimeMs });
-      } catch {
-        // ignore unreadable files
-      }
-    }
-  }
-
-  rolloutFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return rolloutFiles.slice(0, 5).map((entry) => entry.filePath);
-}
-
-async function parseRolloutForUsage(filePath: string): Promise<{ snapshot: UsageSnapshot; timestampSeconds: number } | null> {
-  let raw: string;
-  try {
-    raw = await fsp.readFile(filePath, "utf8");
-  } catch {
-    return null;
-  }
-
-  let latest: { snapshot: UsageSnapshot; timestampSeconds: number } | null = null;
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    let record: unknown;
-    try {
-      record = JSON.parse(trimmed) as unknown;
-    } catch {
-      continue;
-    }
-
-    const rateLimits = findNestedRateLimits(record);
-    const snapshot = buildSnapshotFromRateLimits(rateLimits, "local");
-    if (!snapshot) continue;
-
-    const row = record as Record<string, unknown>;
-    const timestampSeconds = parseTimestampSeconds(
-      row.event_timestamp_ms ?? row.timestamp_ms ?? row.timestamp,
-    );
-
-    if (!latest || timestampSeconds >= latest.timestampSeconds) {
-      latest = {
-        snapshot,
-        timestampSeconds,
-      };
-    }
-  }
-
-  return latest;
-}
-
-export async function fetchUsageFromLocal(codexDir: string): Promise<UsageSnapshot | null> {
-  const sessionsDir = path.join(codexDir, "sessions");
-  const files = await collectRolloutFiles(sessionsDir);
-  for (const filePath of files) {
-    const latest = await parseRolloutForUsage(filePath);
-    if (latest) {
-      return latest.snapshot;
-    }
-  }
-
-  return null;
-}
+// Exposed for tests only.
+export const __testing = {
+  isLoopbackHostname,
+  resolveProxyBaseUrl,
+};
