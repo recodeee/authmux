@@ -4,6 +4,12 @@
 // fresh usage for the active account, compares to the configured
 // thresholds, and if low promotes the candidate with the highest
 // remaining quota. `runDaemon("watch")` runs the loop with a 30s cycle.
+//
+// Theme X3: each evaluation cycle emits one `daemon.cycle.start` and one
+// `daemon.cycle.end` structured event sharing a correlation id so a log
+// reader can pair them. Per the X3 redaction contract we never log auth
+// bytes or snapshot file contents — only counts, account names, and
+// scalar outcomes.
 
 import { AutoSwitchRunResult, RegistryData } from "../types";
 import {
@@ -17,6 +23,7 @@ import {
 } from "../_internal/registry-ops";
 import { activateSnapshot } from "../write/use";
 import { refreshAccountUsage } from "../usage/adapter";
+import { logger, newCorrelationId } from "../../../infra/log/logger";
 
 export function selectBestCandidateFromRegistry(
   candidates: string[],
@@ -41,6 +48,48 @@ export function selectBestCandidateFromRegistry(
 export async function runAutoSwitchOnce(
   getCurrentAccountName: () => Promise<string | null>,
 ): Promise<AutoSwitchRunResult> {
+  const correlationId = newCorrelationId();
+  const cycleLog = logger.child({ correlationId });
+  const startedAt = Date.now();
+
+  cycleLog.info("daemon.cycle.start", {});
+
+  let result: AutoSwitchRunResult;
+  try {
+    result = await runAutoSwitchOnceImpl(getCurrentAccountName, cycleLog);
+  } catch (err) {
+    const ms = Date.now() - startedAt;
+    cycleLog.error("daemon.cycle.end", {
+      ms,
+      action: "error",
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+
+  const ms = Date.now() - startedAt;
+  if (result.switched) {
+    cycleLog.info("daemon.cycle.end", {
+      ms,
+      action: "switched",
+      from: result.fromAccount,
+      to: result.toAccount,
+    });
+  } else {
+    cycleLog.info("daemon.cycle.end", {
+      ms,
+      action: "noop",
+      reason: result.reason,
+    });
+  }
+
+  return result;
+}
+
+async function runAutoSwitchOnceImpl(
+  getCurrentAccountName: () => Promise<string | null>,
+  cycleLog: typeof logger,
+): Promise<AutoSwitchRunResult> {
   const registry = await loadReconciledRegistry();
   if (!registry.autoSwitch.enabled) {
     return { switched: false, reason: "auto-switch is disabled" };
@@ -55,6 +104,11 @@ export async function runAutoSwitchOnce(
   if (!active || !accountNames.includes(active)) {
     return { switched: false, reason: "no active account" };
   }
+
+  cycleLog.debug("daemon.cycle.eval", {
+    accountsCount: accountNames.length,
+    active,
+  });
 
   const nowSeconds = Math.floor(Date.now() / 1000);
 
