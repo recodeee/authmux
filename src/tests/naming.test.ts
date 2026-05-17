@@ -37,9 +37,12 @@ test("normalizeAccountName rejects non-string input", () => {
 
 test("accountFilePath joins the accounts dir with `<name>.json`", () => {
   const previous = process.env.CODEX_AUTH_ACCOUNTS_DIR;
-  process.env.CODEX_AUTH_ACCOUNTS_DIR = "/tmp/authmux-test-accounts";
+  const os = require("node:os") as typeof import("node:os");
+  const path = require("node:path") as typeof import("node:path");
+  const dir = path.join(os.tmpdir(), "authmux-test-accounts");
+  process.env.CODEX_AUTH_ACCOUNTS_DIR = dir;
   try {
-    assert.equal(accountFilePath("alice"), "/tmp/authmux-test-accounts/alice.json");
+    assert.equal(accountFilePath("alice"), path.join(dir, "alice.json"));
   } finally {
     if (previous === undefined) {
       delete process.env.CODEX_AUTH_ACCOUNTS_DIR;
