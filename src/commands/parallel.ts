@@ -1,7 +1,16 @@
+// Theme X4 divergence: `parallel` bypasses BaseCommand per
+// `01-ARCHITECTURE.md` §1.3 (no auth/registry coupling). We wire --json
+// manually using `json-envelope.ts` to keep the on-the-wire shape consistent
+// with BaseCommand commands.
+
 import { Command, Flags } from "@oclif/core";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import {
+  jsonSuccess,
+  writeJsonEnvelope,
+} from "../lib/cli/json-envelope";
 
 const CLAUDE_PARALLEL_DIR = path.join(os.homedir(), ".claude-accounts");
 
@@ -28,6 +37,10 @@ export default class ClaudeParallel extends Command {
     aliases: Flags.boolean({ description: "Print shell aliases for all profiles" }),
     install: Flags.boolean({ description: "Install aliases into shell rc file" }),
     list: Flags.boolean({ char: "l", description: "List profiles" }),
+    json: Flags.boolean({
+      description: "Emit a single JSON envelope to stdout (Theme X4).",
+      default: false,
+    }),
   } as const;
 
   static examples = [
@@ -38,8 +51,11 @@ export default class ClaudeParallel extends Command {
     "agent-auth parallel --install",
   ];
 
+  private jsonMode = false;
+
   async run(): Promise<void> {
     const { flags } = await this.parse(ClaudeParallel);
+    this.jsonMode = Boolean(flags.json);
 
     if (flags.add) {
       this.addProfile(flags.add);
@@ -56,11 +72,25 @@ export default class ClaudeParallel extends Command {
 
   private addProfile(name: string): void {
     const dir = path.join(CLAUDE_PARALLEL_DIR, name);
-    if (fs.existsSync(dir)) {
+    const existed = fs.existsSync(dir);
+    if (!existed) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    if (this.jsonMode) {
+      writeJsonEnvelope(jsonSuccess({
+        action: "add" as const,
+        profile: name,
+        dir,
+        created: !existed,
+      }));
+      return;
+    }
+
+    if (existed) {
       this.log(`Profile "${name}" already exists at ${dir}`);
       return;
     }
-    fs.mkdirSync(dir, { recursive: true });
     this.log(`Created profile: ${name}`);
     this.log(`  Config dir: ${dir}`);
     this.log(`  Run: CLAUDE_CONFIG_DIR=${dir} claude`);
@@ -73,19 +103,41 @@ export default class ClaudeParallel extends Command {
       this.error(`Profile "${name}" not found.`);
     }
     fs.rmSync(dir, { recursive: true });
+
+    if (this.jsonMode) {
+      writeJsonEnvelope(jsonSuccess({
+        action: "remove" as const,
+        profile: name,
+        dir,
+      }));
+      return;
+    }
     this.log(`Removed profile: ${name}`);
   }
 
   private listProfiles(): void {
     const profiles = getProfiles();
+    const entries = profiles.map((p) => ({
+      name: p,
+      configDir: path.join(CLAUDE_PARALLEL_DIR, p),
+    }));
+
+    if (this.jsonMode) {
+      writeJsonEnvelope(jsonSuccess({
+        action: "list" as const,
+        profiles: entries,
+      }));
+      return;
+    }
+
     if (!profiles.length) {
       this.log("No Claude Code parallel profiles configured.");
       this.log("Add one: agent-auth parallel --add <name>");
       return;
     }
     this.log("Claude Code parallel profiles:\n");
-    for (const p of profiles) {
-      this.log(`  • ${p}  →  ${path.join(CLAUDE_PARALLEL_DIR, p)}`);
+    for (const p of entries) {
+      this.log(`  • ${p.name}  →  ${p.configDir}`);
     }
     this.log(`\nRun any profile: claude-<name> (after installing aliases)`);
   }
@@ -104,6 +156,17 @@ export default class ClaudeParallel extends Command {
 
   private printAliases(): void {
     const aliases = this.generateAliases();
+    const profiles = getProfiles();
+
+    if (this.jsonMode) {
+      writeJsonEnvelope(jsonSuccess({
+        action: "aliases" as const,
+        profiles,
+        aliases,
+      }));
+      return;
+    }
+
     if (!aliases) {
       this.log("No profiles. Add one first: agent-auth parallel --add <name>");
       return;
@@ -134,6 +197,15 @@ export default class ClaudeParallel extends Command {
 
     content = content.trimEnd() + "\n\n" + block + "\n";
     fs.writeFileSync(rc, content);
+
+    if (this.jsonMode) {
+      writeJsonEnvelope(jsonSuccess({
+        action: "install" as const,
+        rc,
+        profiles,
+      }));
+      return;
+    }
     this.log(`Installed aliases in ${rc}`);
     this.log(`Run: source ${rc}`);
     this.log(`\nAvailable commands:`);

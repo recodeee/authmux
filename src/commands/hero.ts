@@ -1,11 +1,66 @@
-import { Command } from "@oclif/core";
+import { BaseCommand } from "../lib/base-command";
 
-export default class Hero extends Command {
+interface HeroSection {
+  title: string;
+  items: Array<{ command: string; description: string }>;
+}
+
+const HERO_SECTIONS: HeroSection[] = [
+  {
+    title: "Quick Start",
+    items: [
+      { command: "agent-auth save work", description: "Snapshot current session" },
+      { command: "agent-auth login personal", description: "Login + save in one step" },
+      { command: "agent-auth use work", description: "Switch active account" },
+      { command: "agent-auth use", description: "Interactive picker" },
+      { command: "agent-auth list", description: "All accounts + usage %" },
+    ],
+  },
+  {
+    title: "Parallel Claude Code",
+    items: [
+      { command: "agent-auth parallel --add work", description: "" },
+      { command: "agent-auth parallel --add personal", description: "" },
+      { command: "agent-auth parallel --install", description: "" },
+    ],
+  },
+  {
+    title: "Kiro CLI",
+    items: [
+      { command: "agent-auth kiro", description: "Switch Kiro accounts" },
+      { command: "agent-auth kiro-login", description: "Add new Kiro account" },
+    ],
+  },
+  {
+    title: "More",
+    items: [
+      { command: "agent-auth config", description: "Auto-switch thresholds" },
+      { command: "agent-auth status", description: "Service & usage status" },
+      { command: "agent-auth remove", description: "Delete saved accounts" },
+      { command: "agent-auth update", description: "Check for new version" },
+      { command: "agent-auth --help", description: "Full command reference" },
+    ],
+  },
+];
+
+export default class Hero extends BaseCommand {
   static description = "Show usage tutorial and quick-start guide";
   static hidden = true;
 
+  static flags = {
+    ...BaseCommand.jsonFlag,
+  } as const;
+
+  // Hero is a printed tutorial; no auth snapshot sync required.
+  protected readonly syncExternalAuthBeforeRun = false;
+
   async run(): Promise<void> {
-    this.log(`
+    const { flags } = await this.parse(Hero);
+    this.setJsonMode(flags);
+
+    await this.runSafe(async () => {
+      this.emit({ sections: HERO_SECTIONS }, () => {
+        this.log(`
   \x1b[1m\x1b[36m╭─────────────────────────────────────────────────────╮\x1b[0m
   \x1b[1m\x1b[36m│\x1b[0m  🔐 \x1b[1magent-auth\x1b[0m                                       \x1b[1m\x1b[36m│\x1b[0m
   \x1b[1m\x1b[36m│\x1b[0m  Multi-account manager for AI CLI agents             \x1b[1m\x1b[36m│\x1b[0m
@@ -40,5 +95,7 @@ export default class Hero extends Command {
   \x1b[33m$\x1b[0m agent-auth update             \x1b[2mCheck for new version\x1b[0m
   \x1b[33m$\x1b[0m agent-auth --help             \x1b[2mFull command reference\x1b[0m
 `);
+      });
+    });
   }
 }

@@ -1,11 +1,20 @@
-import { Args, Flags, Command } from "@oclif/core";
+import { Args, Flags } from "@oclif/core";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { BaseCommand } from "../lib/base-command";
+import { CodexAuthError } from "../lib/accounts";
 
 const ACCOUNTS_DIR = path.join(os.homedir(), ".codex", "accounts");
 
-export default class Import extends Command {
+interface ImportedAccount {
+  name: string;
+  action: "imported" | "updated" | "skipped";
+  source: string;
+  reason?: string;
+}
+
+export default class Import extends BaseCommand {
   static description = "Import auth file(s) into managed accounts (single file, directory, or --purge to rebuild registry)";
 
   static args = {
@@ -15,81 +24,127 @@ export default class Import extends Command {
   static flags = {
     alias: Flags.string({ description: "Alias name for the imported account (single file only)" }),
     purge: Flags.boolean({ description: "Rebuild registry from existing auth snapshots in ~/.codex/accounts/" }),
+    ...BaseCommand.jsonFlag,
   } as const;
+
+  // Import writes snapshot files directly; do not let the base sync clobber
+  // any in-flight state before the import runs.
+  protected readonly syncExternalAuthBeforeRun = false;
 
   async run(): Promise<void> {
     const { args, flags } = await this.parse(Import);
+    this.setJsonMode(flags);
 
-    if (flags.purge) {
-      this.purgeRebuild(args.path);
-      return;
-    }
+    await this.runSafe(async () => {
+      if (flags.purge) {
+        this.purgeRebuild(args.path);
+        return;
+      }
 
-    const target = args.path;
-    if (!target) {
-      this.error("Provide a path to an auth JSON file or directory.");
-    }
+      const target = args.path;
+      if (!target) {
+        throw new CodexAuthError(
+          "Provide a path to an auth JSON file or directory.",
+        );
+      }
 
-    const stat = fs.statSync(target, { throwIfNoEntry: false });
-    if (!stat) {
-      this.error(`Path not found: ${target}`);
-    }
+      const stat = fs.statSync(target, { throwIfNoEntry: false });
+      if (!stat) {
+        throw new CodexAuthError(`Path not found: ${target}`);
+      }
 
-    fs.mkdirSync(ACCOUNTS_DIR, { recursive: true });
+      fs.mkdirSync(ACCOUNTS_DIR, { recursive: true });
 
-    if (stat.isDirectory()) {
-      this.importDirectory(target);
-    } else {
-      this.importFile(target, flags.alias);
-    }
+      if (stat.isDirectory()) {
+        this.importDirectory(target);
+      } else {
+        const record = this.importFile(target, flags.alias);
+        this.emit(
+          { mode: "file" as const, imported: [record] },
+          (data) => {
+            for (const r of data.imported) {
+              if (r.action === "imported") this.log(`  Imported: ${r.name}`);
+              else if (r.action === "updated") this.log(`  Updated: ${r.name}`);
+            }
+          },
+        );
+      }
+    });
   }
 
-  private importFile(filePath: string, alias?: string): void {
+  private importFile(filePath: string, alias?: string): ImportedAccount {
     const raw = fs.readFileSync(filePath, "utf-8");
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      this.error(`Malformed JSON: ${filePath}`);
-      return;
+      throw new CodexAuthError(`Malformed JSON: ${filePath}`);
     }
 
     const name = alias || this.extractName(parsed, filePath);
     const dest = path.join(ACCOUNTS_DIR, `${name}.json`);
-
-    if (fs.existsSync(dest)) {
-      this.log(`  Updated: ${name}`);
-    } else {
-      this.log(`  Imported: ${name}`);
-    }
+    const existed = fs.existsSync(dest);
     fs.writeFileSync(dest, raw);
+    return {
+      name,
+      action: existed ? "updated" : "imported",
+      source: filePath,
+    };
   }
 
   private importDirectory(dirPath: string): void {
     const files = fs.readdirSync(dirPath).filter((f) => f.endsWith(".json"));
+    const imported: ImportedAccount[] = [];
+
     if (!files.length) {
-      this.log(`No .json files found in ${dirPath}`);
+      this.emit(
+        { mode: "directory" as const, imported, dir: dirPath, total: 0 },
+        () => {
+          this.log(`No .json files found in ${dirPath}`);
+        },
+      );
       return;
     }
-    let count = 0;
+
     for (const file of files) {
       try {
-        this.importFile(path.join(dirPath, file));
-        count++;
+        imported.push(this.importFile(path.join(dirPath, file)));
       } catch (err) {
-        this.warn(`Skipped ${file}: ${err}`);
+        imported.push({
+          name: file,
+          action: "skipped",
+          source: path.join(dirPath, file),
+          reason: String(err),
+        });
       }
     }
-    this.log(`\nImported ${count}/${files.length} files.`);
+
+    const succeeded = imported.filter((r) => r.action !== "skipped").length;
+    this.emit(
+      {
+        mode: "directory" as const,
+        imported,
+        dir: dirPath,
+        total: files.length,
+        succeeded,
+      },
+      (data) => {
+        for (const r of data.imported) {
+          if (r.action === "imported") this.log(`  Imported: ${r.name}`);
+          else if (r.action === "updated") this.log(`  Updated: ${r.name}`);
+          else if (r.action === "skipped") this.warn(`Skipped ${r.name}: ${r.reason}`);
+        }
+        this.log(`\nImported ${data.succeeded}/${data.total} files.`);
+      },
+    );
   }
 
   private purgeRebuild(scanPath?: string): void {
     const dir = scanPath || ACCOUNTS_DIR;
     if (!fs.existsSync(dir)) {
-      this.error(`Directory not found: ${dir}`);
+      throw new CodexAuthError(`Directory not found: ${dir}`);
     }
     const files = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
-    this.log(`Rebuilding registry from ${files.length} files in ${dir}...`);
 
     // Re-import each file to ensure registry consistency
     fs.mkdirSync(ACCOUNTS_DIR, { recursive: true });
@@ -105,13 +160,27 @@ export default class Import extends Command {
 
     // Also import current auth.json if it exists
     const authJson = path.join(os.homedir(), ".codex", "auth.json");
+    let includedAuthJson = false;
     if (fs.existsSync(authJson) && !fs.lstatSync(authJson).isSymbolicLink()) {
       const dest = path.join(ACCOUNTS_DIR, "current.json");
       fs.copyFileSync(authJson, dest);
       count++;
+      includedAuthJson = true;
     }
 
-    this.log(`Registry rebuilt: ${count} accounts.`);
+    this.emit(
+      {
+        mode: "purge" as const,
+        dir,
+        scanned: files.length,
+        rebuilt: count,
+        includedAuthJson,
+      },
+      (data) => {
+        this.log(`Rebuilding registry from ${data.scanned} files in ${data.dir}...`);
+        this.log(`Registry rebuilt: ${data.rebuilt} accounts.`);
+      },
+    );
   }
 
   private extractName(parsed: Record<string, unknown>, filePath: string): string {

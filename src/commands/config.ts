@@ -1,5 +1,6 @@
 import { Args, Flags } from "@oclif/core";
 import { BaseCommand } from "../lib/base-command";
+import { AutoSwitchConfigError, CodexAuthError } from "../lib/accounts";
 
 export default class ConfigCommand extends BaseCommand {
   static description = "Manage auto-switch and usage API configuration";
@@ -27,11 +28,13 @@ export default class ConfigCommand extends BaseCommand {
       description: "Set weekly threshold percent (1-100)",
       required: false,
     }),
+    ...BaseCommand.jsonFlag,
   } as const;
 
   async run(): Promise<void> {
     await this.runSafe(async () => {
       const { args, flags } = await this.parse(ConfigCommand);
+      this.setJsonMode(flags);
       const section = args.section as "auto" | "api";
       const action = (args.action as string | undefined)?.toLowerCase();
 
@@ -53,30 +56,48 @@ export default class ConfigCommand extends BaseCommand {
 
     if (action === "enable") {
       if (hasThresholds) {
-        this.error("`config auto` cannot mix enable/disable with threshold flags.");
+        throw new AutoSwitchConfigError(
+          "`config auto` cannot mix enable/disable with threshold flags.",
+        );
       }
       const status = await this.accounts.setAutoSwitchEnabled(true);
-      this.log(
-        `auto-switch enabled; usage mode: ${status.usageMode === "api" ? "api" : "local-only"}`,
+      this.emit(
+        { section: "auto" as const, action: "enable" as const, status },
+        (data) => {
+          this.log(
+            `auto-switch enabled; usage mode: ${data.status.usageMode === "api" ? "api" : "local-only"}`,
+          );
+        },
       );
       return;
     }
 
     if (action === "disable") {
       if (hasThresholds) {
-        this.error("`config auto` cannot mix enable/disable with threshold flags.");
+        throw new AutoSwitchConfigError(
+          "`config auto` cannot mix enable/disable with threshold flags.",
+        );
       }
-      await this.accounts.setAutoSwitchEnabled(false);
-      this.log("auto-switch disabled");
+      const status = await this.accounts.setAutoSwitchEnabled(false);
+      this.emit(
+        { section: "auto" as const, action: "disable" as const, status },
+        () => {
+          this.log("auto-switch disabled");
+        },
+      );
       return;
     }
 
     if (action) {
-      this.error(`Unknown action \"${action}\" for \`config auto\`.`);
+      throw new AutoSwitchConfigError(
+        `Unknown action "${action}" for \`config auto\`.`,
+      );
     }
 
     if (!hasThresholds) {
-      this.error("`config auto` requires `enable`, `disable`, or threshold flags.");
+      throw new AutoSwitchConfigError(
+        "`config auto` requires `enable`, `disable`, or threshold flags.",
+      );
     }
 
     const status = await this.accounts.configureAutoSwitchThresholds({
@@ -84,17 +105,29 @@ export default class ConfigCommand extends BaseCommand {
       thresholdWeeklyPercent: thresholdWeekly,
     });
 
-    this.log(
-      `auto-switch thresholds updated: 5h<${status.threshold5hPercent}%, weekly<${status.thresholdWeeklyPercent}%`,
+    this.emit(
+      { section: "auto" as const, action: "thresholds" as const, status },
+      (data) => {
+        this.log(
+          `auto-switch thresholds updated: 5h<${data.status.threshold5hPercent}%, weekly<${data.status.thresholdWeeklyPercent}%`,
+        );
+      },
     );
   }
 
   private async handleApiConfig(action: string | undefined): Promise<void> {
     if (action !== "enable" && action !== "disable") {
-      this.error("`config api` requires `enable` or `disable`.");
+      throw new CodexAuthError(
+        "`config api` requires `enable` or `disable`.",
+      );
     }
 
     const status = await this.accounts.setApiUsageEnabled(action === "enable");
-    this.log(`usage mode: ${status.usageMode}`);
+    this.emit(
+      { section: "api" as const, action: action as "enable" | "disable", status },
+      (data) => {
+        this.log(`usage mode: ${data.status.usageMode}`);
+      },
+    );
   }
 }

@@ -196,10 +196,10 @@ that prints user-facing data (`config`, `daemon --once`, `forecast`,
 `kiro` without args).
 
 **Exit criteria.**
-- [ ] Every read command has `--json`.
-- [ ] A snapshot test asserts every `--json` output is valid JSON for at
+- [x] Every read command has `--json`.
+- [x] A snapshot test asserts every `--json` output is valid JSON for at
       least one fixture per command.
-- [ ] `docs/future/02-COMMANDS.md` (when it lands) lists the JSON schema for
+- [x] `docs/future/02-COMMANDS.md` (when it lands) lists the JSON schema for
       each command.
 
 **Dependencies.** N3.
