@@ -21,46 +21,45 @@ export default class ListCommand extends BaseCommand {
       description: "Show per-account mapping metadata (email/account/user/type/usage)",
       default: false,
     }),
+    ...BaseCommand.jsonFlag,
   } as const;
 
   async run(): Promise<void> {
-    await this.runSafe(async () => {
-      const { flags } = await this.parse(ListCommand);
-      const detailed = Boolean(flags.details);
-      await this.maybeOfferGlobalUpdate();
+    const { flags } = await this.parse(ListCommand);
+    this.setJsonMode(flags);
+    const detailed = Boolean(flags.details);
 
-      if (!detailed) {
-        const accounts = await this.accounts.listAccountMappings({ refreshUsage: "missing" });
-        if (!accounts.length) {
+    await this.runSafe(async () => {
+      // Interactive update prompt would corrupt JSON stdout; skip it.
+      if (!this.jsonMode) {
+        await this.maybeOfferGlobalUpdate();
+      }
+
+      const accounts = await this.accounts.listAccountMappings({ refreshUsage: "missing" });
+
+      this.emit({ accounts, detailed }, (payload) => {
+        if (!payload.accounts.length) {
           this.log("No saved Codex accounts yet. Run `authmux save <name>`.");
           return;
         }
 
-        for (const account of accounts) {
+        for (const account of payload.accounts) {
           const mark = account.active ? "*" : " ";
+          if (!payload.detailed) {
+            this.log(
+              `${mark} ${account.name}  type=${formatAccountType(account.planType)}  5h=${this.formatRemaining(account.remaining5hPercent)}  weekly=${this.formatRemaining(account.remainingWeeklyPercent)}`,
+            );
+            continue;
+          }
+          this.log(`${mark} ${account.name}`);
           this.log(
-            `${mark} ${account.name}  type=${formatAccountType(account.planType)}  5h=${this.formatRemaining(account.remaining5hPercent)}  weekly=${this.formatRemaining(account.remainingWeeklyPercent)}`,
+            `    email=${account.email ?? "-"} account=${account.accountId ?? "-"} user=${account.userId ?? "-"}`,
+          );
+          this.log(
+            `    type=${formatAccountType(account.planType)} plan=${account.planType ?? "-"} usage=${account.usageSource ?? "-"} 5h=${this.formatRemaining(account.remaining5hPercent)} weekly=${this.formatRemaining(account.remainingWeeklyPercent)} lastUsageAt=${account.lastUsageAt ?? "-"}`,
           );
         }
-        return;
-      }
-
-      const accounts = await this.accounts.listAccountMappings({ refreshUsage: "missing" });
-      if (!accounts.length) {
-        this.log("No saved Codex accounts yet. Run `authmux save <name>`.");
-        return;
-      }
-
-      for (const account of accounts) {
-        const mark = account.active ? "*" : " ";
-        this.log(`${mark} ${account.name}`);
-        this.log(
-          `    email=${account.email ?? "-"} account=${account.accountId ?? "-"} user=${account.userId ?? "-"}`,
-        );
-        this.log(
-          `    type=${formatAccountType(account.planType)} plan=${account.planType ?? "-"} usage=${account.usageSource ?? "-"} 5h=${this.formatRemaining(account.remaining5hPercent)} weekly=${this.formatRemaining(account.remainingWeeklyPercent)} lastUsageAt=${account.lastUsageAt ?? "-"}`,
-        );
-      }
+      });
     });
   }
 

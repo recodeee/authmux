@@ -21,14 +21,22 @@ export default class UseCommand extends BaseCommand {
 
   static flags = {
     "no-kiro": Flags.boolean({ description: "Skip Kiro CLI mirror even if a matching snapshot exists" }),
+    ...BaseCommand.jsonFlag,
   } as const;
 
   async run(): Promise<void> {
+    const { args, flags } = await this.parse(UseCommand);
+    this.setJsonMode(flags);
+
     await this.runSafe(async () => {
-      const { args, flags } = await this.parse(UseCommand);
       let account = args.account as string | undefined;
 
       if (!account) {
+        if (this.jsonMode) {
+          // No interactive prompt allowed under --json: stdout would
+          // be corrupted by the prompt UI.
+          throw new PromptCancelledError();
+        }
         account = await this.promptForAccount();
       }
 
@@ -37,20 +45,38 @@ export default class UseCommand extends BaseCommand {
         activated = await this.accounts.useAccount(account);
         recordSuccess(activated);
         recordSwitch();
-        this.log(`Switched Codex auth to "${activated}".`);
       } catch (err) {
         recordFailure(account);
         throw err;
       }
 
-      if (flags["no-kiro"]) return;
-
-      const mirror = switchKiroSnapshot(activated);
-      if (mirror.switched) {
-        this.log(`Mirrored Kiro CLI to "${mirror.active}".`);
-      } else if (mirror.attempted) {
-        this.warn(`Kiro mirror skipped: ${mirror.reason}`);
+      let mirror: { switched: boolean; attempted: boolean; active?: string; reason?: string } = {
+        switched: false,
+        attempted: false,
+      };
+      if (!flags["no-kiro"]) {
+        mirror = switchKiroSnapshot(activated);
       }
+
+      this.emit(
+        {
+          activated,
+          kiro: {
+            attempted: mirror.attempted,
+            switched: mirror.switched,
+            active: mirror.active ?? null,
+            reason: mirror.reason ?? null,
+          },
+        },
+        (data) => {
+          this.log(`Switched Codex auth to "${data.activated}".`);
+          if (data.kiro.switched && data.kiro.active) {
+            this.log(`Mirrored Kiro CLI to "${data.kiro.active}".`);
+          } else if (data.kiro.attempted && data.kiro.reason) {
+            this.warn(`Kiro mirror skipped: ${data.kiro.reason}`);
+          }
+        },
+      );
     });
   }
 
