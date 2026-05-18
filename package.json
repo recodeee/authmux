@@ -1,6 +1,6 @@
 {
   "name": "authmux",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "description": "Multi-account auth multiplexer for AI CLI agents — Claude Code, Codex, Kiro CLI.",
   "license": "MIT",
   "bin": {
