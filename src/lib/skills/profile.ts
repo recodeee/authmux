@@ -3,8 +3,22 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-export type SkillAgent = "codex" | "claude";
+export type SkillAgent = "codex" | "claude" | "hermes";
 export type SkillProfileSource = "env" | "account" | "default";
+
+const SKILL_AGENTS: readonly SkillAgent[] = ["codex", "claude", "hermes"];
+
+export function isSkillAgent(value: string): value is SkillAgent {
+  return (SKILL_AGENTS as readonly string[]).includes(value);
+}
+
+export function resolveDefaultSkillTarget(agent: SkillAgent): string | undefined {
+  if (agent === "hermes") {
+    const root = process.env.AUTHMUX_HERMES_HOME || process.env.HERMES_AGENT_HOME || "~/Documents/hermes-agent";
+    return path.join(resolvePath(root), "skills");
+  }
+  return undefined;
+}
 
 export interface ResolvedSkillProfile {
   profile: string;
@@ -77,13 +91,14 @@ export function activateSkillProfile(input: {
 }): SkillProfileActivation {
   const profile = normalizeSkillProfileName(input.profile);
   const agent = input.agent ?? "codex";
+  const target = input.target ?? resolveDefaultSkillTarget(agent);
   const activator = resolveSoulSkillActivator();
   if (!fs.existsSync(activator)) {
     return {
       activated: false,
       profile,
       agent,
-      target: input.target,
+      target,
       reason: `missing activator: ${activator}`,
       stdout: "",
       stderr: "",
@@ -91,8 +106,8 @@ export function activateSkillProfile(input: {
   }
 
   const args = ["--profile", profile, "--agent", agent];
-  if (input.target) {
-    args.push("--target", input.target);
+  if (target) {
+    args.push("--target", target);
   }
 
   const result = spawnSync(activator, args, {
@@ -114,7 +129,7 @@ export function activateSkillProfile(input: {
     activated: true,
     profile,
     agent,
-    target: input.target ?? targetMatch?.[1],
+    target: target ?? targetMatch?.[1],
     skillCount: countMatch ? Number.parseInt(countMatch[1], 10) : undefined,
     stdout,
     stderr,

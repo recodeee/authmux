@@ -6,8 +6,10 @@ import path from "node:path";
 
 import {
   activateSkillProfile,
+  isSkillAgent,
   listAvailableSkillProfiles,
   normalizeSkillProfileName,
+  resolveDefaultSkillTarget,
 } from "../lib/skills/profile";
 
 test("normalizeSkillProfileName accepts simple profile names", () => {
@@ -40,4 +42,50 @@ test("activateSkillProfile delegates to the Soul activator", async (t) => {
   assert.equal(result.activated, true);
   assert.equal(result.profile, "base");
   assert.equal(result.skillCount, 10);
+});
+
+test("isSkillAgent narrows to known agents", () => {
+  assert.equal(isSkillAgent("codex"), true);
+  assert.equal(isSkillAgent("claude"), true);
+  assert.equal(isSkillAgent("hermes"), true);
+  assert.equal(isSkillAgent("kiro"), false);
+  assert.equal(isSkillAgent(""), false);
+});
+
+test("resolveDefaultSkillTarget points hermes at hermes-agent/skills", () => {
+  const previous = process.env.AUTHMUX_HERMES_HOME;
+  process.env.AUTHMUX_HERMES_HOME = "/tmp/authmux-hermes-fixture";
+  try {
+    assert.equal(
+      resolveDefaultSkillTarget("hermes"),
+      path.join("/tmp/authmux-hermes-fixture", "skills"),
+    );
+  } finally {
+    if (previous === undefined) delete process.env.AUTHMUX_HERMES_HOME;
+    else process.env.AUTHMUX_HERMES_HOME = previous;
+  }
+});
+
+test("resolveDefaultSkillTarget returns undefined for codex and claude", () => {
+  assert.equal(resolveDefaultSkillTarget("codex"), undefined);
+  assert.equal(resolveDefaultSkillTarget("claude"), undefined);
+});
+
+test("activateSkillProfile fills hermes target from env when not given", async (t) => {
+  const targetRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "authmux-skills-hermes-"));
+  t.after(async () => {
+    await fsp.rm(targetRoot, { recursive: true, force: true });
+  });
+  const previous = process.env.AUTHMUX_HERMES_HOME;
+  process.env.AUTHMUX_HERMES_HOME = targetRoot;
+  try {
+    const result = activateSkillProfile({ profile: "base", agent: "hermes" });
+    assert.equal(result.activated, true);
+    assert.equal(result.agent, "hermes");
+    assert.equal(result.target, path.join(targetRoot, "skills"));
+    assert.equal(result.skillCount, 10);
+  } finally {
+    if (previous === undefined) delete process.env.AUTHMUX_HERMES_HOME;
+    else process.env.AUTHMUX_HERMES_HOME = previous;
+  }
 });
