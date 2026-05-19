@@ -69,6 +69,13 @@ function sanitizeUsageSnapshot(input: unknown): UsageSnapshot | undefined {
   };
 }
 
+function sanitizeSkillProfile(input: unknown): string | undefined {
+  if (typeof input !== "string") return undefined;
+  const profile = input.trim();
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(profile)) return undefined;
+  return profile;
+}
+
 function sanitizeEntry(name: string, entry: unknown): AccountRegistryEntry {
   const raw = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
   const sanitizedUsage = sanitizeUsageSnapshot(raw.lastUsage);
@@ -80,6 +87,7 @@ function sanitizeEntry(name: string, entry: unknown): AccountRegistryEntry {
     accountId: typeof raw.accountId === "string" ? (raw.accountId as string) : undefined,
     userId: typeof raw.userId === "string" ? (raw.userId as string) : undefined,
     planType: typeof raw.planType === "string" ? (raw.planType as string) : undefined,
+    skillProfile: sanitizeSkillProfile(raw.skillProfile),
     lastUsageAt: typeof raw.lastUsageAt === "string" ? (raw.lastUsageAt as string) : undefined,
     lastUsage: sanitizedUsage,
   };

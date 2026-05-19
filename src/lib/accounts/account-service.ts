@@ -17,6 +17,7 @@ import {
   ListAccountMappingsOptions,
   findMatchingAccounts as findMatchingAccountsImpl,
   getCurrentAccountName as getCurrentAccountNameImpl,
+  loadReconciledRegistry,
   listAccountChoices as listAccountChoicesImpl,
   listAccountMappings as listAccountMappingsImpl,
   listAccountNames as listAccountNamesImpl,
@@ -35,6 +36,7 @@ import {
 } from "./write/save";
 import {
   useAccount as useAccountImpl,
+  UseAccountOptions,
 } from "./write/use";
 import {
   RemoveResult,
@@ -53,6 +55,14 @@ import {
   runDaemon as runDaemonImpl,
 } from "./auto-switch/policy";
 import { refreshListUsageIfNeeded } from "./usage/adapter";
+import { AccountNotFoundError } from "./errors";
+import { normalizeAccountName } from "./naming";
+import { persistRegistry } from "./_internal/registry-ops";
+import {
+  defaultSkillProfileName,
+  normalizeSkillProfileName,
+  ResolvedSkillProfile,
+} from "../skills/profile";
 import {
   ResolvedDefaultAccountName,
   ResolvedLoginAccountName,
@@ -64,6 +74,7 @@ export type {
 } from "./read/listing";
 export type { RemoveResult } from "./write/remove";
 export type { SaveAccountOptions } from "./write/save";
+export type { UseAccountOptions } from "./write/use";
 export type {
   ResolvedDefaultAccountName,
   ResolvedLoginAccountName,
@@ -119,8 +130,52 @@ export class AccountService {
     return resolveLoginAccountNameFromCurrentAuthImpl(() => this.getCurrentAccountName());
   }
 
-  public useAccount(rawName: string): Promise<string> {
-    return useAccountImpl(rawName, () => this.syncExternalAuthSnapshotIfNeeded());
+  public useAccount(rawName: string, options?: UseAccountOptions): Promise<string> {
+    return useAccountImpl(rawName, () => this.syncExternalAuthSnapshotIfNeeded(), options);
+  }
+
+  public async setSkillProfileForAccount(
+    rawName: string,
+    rawProfile: string,
+  ): Promise<{ accountName: string; skillProfile: string }> {
+    const accountName = normalizeAccountName(rawName);
+    const skillProfile = normalizeSkillProfileName(rawProfile);
+    const registry = await loadReconciledRegistry();
+    if (!registry.accounts[accountName]) {
+      throw new AccountNotFoundError(accountName);
+    }
+    registry.accounts[accountName].skillProfile = skillProfile;
+    await persistRegistry(registry);
+    return { accountName, skillProfile };
+  }
+
+  public async resolveCurrentSkillProfile(): Promise<ResolvedSkillProfile> {
+    const envProfile = process.env.AUTHMUX_SKILL_PROFILE || process.env.SOUL_SKILL_PROFILE;
+    if (envProfile && envProfile.trim().length > 0) {
+      return {
+        profile: normalizeSkillProfileName(envProfile),
+        source: "env",
+      };
+    }
+
+    const accountName = await this.getCurrentAccountName();
+    if (accountName) {
+      const registry = await loadReconciledRegistry();
+      const accountProfile = registry.accounts[accountName]?.skillProfile;
+      if (accountProfile) {
+        return {
+          profile: normalizeSkillProfileName(accountProfile),
+          source: "account",
+          accountName,
+        };
+      }
+    }
+
+    return {
+      profile: defaultSkillProfileName(),
+      source: "default",
+      accountName: accountName ?? undefined,
+    };
   }
 
   public removeAccounts(accountNames: string[]): Promise<RemoveResult> {

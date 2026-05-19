@@ -5,6 +5,7 @@ import { NoAccountsSavedError, PromptCancelledError } from "../lib/accounts";
 import { recordSuccess, recordFailure } from "../lib/account-health";
 import { recordSwitch } from "../lib/account-savings";
 import { hasKiroSnapshot, switchKiroSnapshot } from "../lib/kiro-mirror";
+import { activateSkillProfile } from "../lib/skills/profile";
 
 export default class UseCommand extends BaseCommand {
   protected readonly syncExternalAuthBeforeRun = false;
@@ -21,6 +22,13 @@ export default class UseCommand extends BaseCommand {
 
   static flags = {
     "no-kiro": Flags.boolean({ description: "Skip Kiro CLI mirror even if a matching snapshot exists" }),
+    "skill-profile": Flags.string({
+      description: "Attach a Soul skill profile to this account before activating it",
+    }),
+    "no-skill-activate": Flags.boolean({
+      description: "Do not activate the account skill profile after switching",
+      default: false,
+    }),
     ...BaseCommand.jsonFlag,
   } as const;
 
@@ -42,7 +50,9 @@ export default class UseCommand extends BaseCommand {
 
       let activated: string;
       try {
-        activated = await this.accounts.useAccount(account);
+        activated = await this.accounts.useAccount(account, {
+          skillProfile: flags["skill-profile"],
+        });
         recordSuccess(activated);
         recordSwitch();
       } catch (err) {
@@ -58,9 +68,16 @@ export default class UseCommand extends BaseCommand {
         mirror = switchKiroSnapshot(activated);
       }
 
+      const resolvedProfile = await this.accounts.resolveCurrentSkillProfile();
+      const skillActivation = flags["no-skill-activate"]
+        ? undefined
+        : activateSkillProfile({ profile: resolvedProfile.profile, agent: "codex" });
+
       this.emit(
         {
           activated,
+          skillProfile: resolvedProfile,
+          skillActivation: skillActivation ?? null,
           kiro: {
             attempted: mirror.attempted,
             switched: mirror.switched,
@@ -70,6 +87,13 @@ export default class UseCommand extends BaseCommand {
         },
         (data) => {
           this.log(`Switched Codex auth to "${data.activated}".`);
+          if (data.skillActivation?.activated) {
+            this.log(
+              `Activated skill profile "${data.skillProfile.profile}" (${data.skillActivation.skillCount ?? "?"} skills).`,
+            );
+          } else if (data.skillActivation && !data.skillActivation.activated) {
+            this.warn(`Skill profile skipped: ${data.skillActivation.reason}`);
+          }
           if (data.kiro.switched && data.kiro.active) {
             this.log(`Mirrored Kiro CLI to "${data.kiro.active}".`);
           } else if (data.kiro.attempted && data.kiro.reason) {

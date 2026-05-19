@@ -34,6 +34,7 @@ function renderHookBlock() {
     "codex() {",
     "  if command -v authmux >/dev/null 2>&1; then",
     "    command authmux restore-session >/dev/null 2>&1 || true",
+    "    command authmux skills activate-current --agent codex >/dev/null 2>&1 || true",
     "  fi",
     "  command codex \"$@\"",
     "  local __codex_exit=$?",

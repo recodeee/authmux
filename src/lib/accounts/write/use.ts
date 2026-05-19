@@ -28,6 +28,11 @@ import {
 import { listAccountNames } from "../read/listing";
 import { writeCurrentName } from "../_internal/auth-state";
 import { pathExists, readAuthSyncState } from "../_internal/fs-helpers";
+import { normalizeSkillProfileName } from "../../skills/profile";
+
+export interface UseAccountOptions {
+  skillProfile?: string;
+}
 
 export async function activateSnapshot(accountName: string): Promise<void> {
   const name = normalizeAccountName(accountName);
@@ -101,6 +106,7 @@ export async function resolveUsableAccountName(
 export async function useAccount(
   rawName: string,
   syncExternalAuthSnapshotIfNeeded: () => Promise<unknown>,
+  options?: UseAccountOptions,
 ): Promise<string> {
   const name = normalizeAccountName(rawName);
   const resolvedName = await resolveUsableAccountName(
@@ -111,6 +117,9 @@ export async function useAccount(
 
   const registry = await loadRegistry();
   await hydrateSnapshotMetadataIfMissing(registry, resolvedName);
+  if (options?.skillProfile) {
+    registry.accounts[resolvedName].skillProfile = normalizeSkillProfileName(options.skillProfile);
+  }
   registry.activeAccountName = resolvedName;
   await persistRegistry(registry);
 
