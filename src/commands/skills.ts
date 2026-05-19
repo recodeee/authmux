@@ -32,7 +32,7 @@ export default class SkillsCommand extends BaseCommand {
     }),
     agent: Flags.string({
       description: "Agent skill target",
-      options: ["codex", "claude"],
+      options: ["codex", "claude", "hermes"],
       default: "codex",
     }),
     target: Flags.string({
