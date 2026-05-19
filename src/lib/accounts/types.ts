@@ -23,6 +23,7 @@ export interface AccountRegistryEntry {
   accountId?: string;
   userId?: string;
   planType?: string;
+  skillProfile?: string;
   createdAt: string;
   lastUsageAt?: string;
   lastUsage?: UsageSnapshot;
@@ -77,6 +78,7 @@ export interface AccountMapping {
   accountId?: string;
   userId?: string;
   planType?: string;
+  skillProfile?: string;
   lastUsageAt?: string;
   usageSource?: UsageSource;
   remaining5hPercent?: number;

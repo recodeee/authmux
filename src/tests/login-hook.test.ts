@@ -66,6 +66,7 @@ test("installLoginHook refreshes an existing legacy hook block", async (t) => {
 
     const contents = await fsp.readFile(rcPath, "utf8");
     assert.ok(contents.includes("command authmux restore-session"));
+    assert.ok(contents.includes("command authmux skills activate-current --agent codex"));
     assert.ok(contents.includes("CODEX_AUTH_FORCE_EXTERNAL_SYNC=1 command authmux status"));
     assert.ok(!contents.includes("# legacy"));
     const startCount = contents.split(LOGIN_HOOK_MARK_START).length - 1;
@@ -110,6 +111,7 @@ test("renderLoginHookBlock includes terminal-mode restore guard", () => {
   assert.ok(hook.includes("__codex_auth_restore_tty"));
   assert.ok(hook.includes("codex() {"));
   assert.ok(hook.includes("command authmux restore-session"));
+  assert.ok(hook.includes("command authmux skills activate-current --agent codex"));
   assert.ok(hook.includes("CODEX_AUTH_FORCE_EXTERNAL_SYNC=1 command authmux status"));
   assert.ok(!hook.includes("__first_non_flag"));
   assert.ok(!hook.includes("if ! typeset -f codex"));

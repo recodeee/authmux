@@ -43,9 +43,11 @@ import {
   ResolvedDefaultAccountName,
   ResolvedLoginAccountName,
 } from "../_internal/name-resolution";
+import { normalizeSkillProfileName } from "../../skills/profile";
 
 export interface SaveAccountOptions {
   force?: boolean;
+  skillProfile?: string;
 }
 
 export async function assertSafeSnapshotOverwrite(input: {
@@ -108,6 +110,9 @@ export async function saveAccount(
 
   const registry = await loadReconciledRegistry();
   await hydrateSnapshotMetadata(registry, name);
+  if (options?.skillProfile) {
+    registry.accounts[name].skillProfile = normalizeSkillProfileName(options.skillProfile);
+  }
   registry.activeAccountName = name;
   await persistRegistry(registry);
 

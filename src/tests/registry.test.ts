@@ -39,6 +39,26 @@ test("sanitizeRegistry preserves the proxy usage source", () => {
   assert.equal(registry.accounts.foo.lastUsage?.source, "proxy");
 });
 
+test("sanitizeRegistry preserves valid skill profiles and drops invalid names", () => {
+  const registry = sanitizeRegistry({
+    accounts: {
+      keep: {
+        name: "keep",
+        createdAt: new Date().toISOString(),
+        skillProfile: "frontend",
+      },
+      drop: {
+        name: "drop",
+        createdAt: new Date().toISOString(),
+        skillProfile: "../all",
+      },
+    },
+  });
+
+  assert.equal(registry.accounts.keep.skillProfile, "frontend");
+  assert.equal(registry.accounts.drop.skillProfile, undefined);
+});
+
 test("sanitizeRegistry preserves api/local/cached sources and rejects unknown", () => {
   for (const source of ["api", "local", "cached", "proxy"] as const) {
     const registry = sanitizeRegistry({

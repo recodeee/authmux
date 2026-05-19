@@ -56,7 +56,7 @@ export default class ListCommand extends BaseCommand {
             `    email=${account.email ?? "-"} account=${account.accountId ?? "-"} user=${account.userId ?? "-"}`,
           );
           this.log(
-            `    type=${formatAccountType(account.planType)} plan=${account.planType ?? "-"} usage=${account.usageSource ?? "-"} 5h=${this.formatRemaining(account.remaining5hPercent)} weekly=${this.formatRemaining(account.remainingWeeklyPercent)} lastUsageAt=${account.lastUsageAt ?? "-"}`,
+            `    type=${formatAccountType(account.planType)} plan=${account.planType ?? "-"} skillProfile=${account.skillProfile ?? "-"} usage=${account.usageSource ?? "-"} 5h=${this.formatRemaining(account.remaining5hPercent)} weekly=${this.formatRemaining(account.remainingWeeklyPercent)} lastUsageAt=${account.lastUsageAt ?? "-"}`,
           );
         }
       });

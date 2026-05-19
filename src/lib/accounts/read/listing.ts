@@ -145,6 +145,7 @@ export async function listAccountMappings(
         accountId: entry?.accountId ?? fallbackSnapshot?.accountId,
         userId: entry?.userId ?? fallbackSnapshot?.userId,
         planType: entry?.planType ?? fallbackSnapshot?.planType,
+        skillProfile: entry?.skillProfile,
         lastUsageAt: entry?.lastUsageAt,
         usageSource: entry?.lastUsage?.source,
         remaining5hPercent,

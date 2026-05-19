@@ -20,6 +20,9 @@ export default class SaveCommand extends BaseCommand {
         "Force overwrite when the existing snapshot name belongs to a different email account",
       default: false,
     }),
+    "skill-profile": Flags.string({
+      description: "Attach a Soul skill profile to this account",
+    }),
     ...BaseCommand.jsonFlag,
   } as const;
 
@@ -34,6 +37,7 @@ export default class SaveCommand extends BaseCommand {
         : await this.accounts.resolveDefaultAccountNameFromCurrentAuth();
       const savedName = await this.accounts.saveAccount(resolvedName.name, {
         force: Boolean(flags.force || resolvedName.forceOverwrite),
+        skillProfile: flags["skill-profile"],
       });
 
       this.emit(
@@ -41,6 +45,7 @@ export default class SaveCommand extends BaseCommand {
           saved: savedName,
           source: resolvedName.source,
           forced: Boolean(flags.force || resolvedName.forceOverwrite),
+          skillProfile: flags["skill-profile"] ?? null,
         },
         (data) => {
           const suffix =
@@ -52,6 +57,9 @@ export default class SaveCommand extends BaseCommand {
                   ? " (reused saved account name)"
                   : " (inferred from auth email)";
           this.log(`Saved current Codex auth tokens as "${data.saved}"${suffix}.`);
+          if (data.skillProfile) {
+            this.log(`Attached skill profile "${data.skillProfile}".`);
+          }
         },
       );
     });

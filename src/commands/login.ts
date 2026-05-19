@@ -30,6 +30,9 @@ export default class LoginCommand extends BaseCommand {
         "Force overwrite when the existing snapshot name belongs to a different detected account identity",
       default: false,
     }),
+    "skill-profile": Flags.string({
+      description: "Attach a Soul skill profile to this account",
+    }),
   } as const;
 
   async run(): Promise<void> {
@@ -54,6 +57,7 @@ export default class LoginCommand extends BaseCommand {
         const forceOverwrite = Boolean(flags.force || resolvedName.forceOverwrite);
         const savedName = await this.accounts.saveAccount(resolvedName.name, {
           force: forceOverwrite,
+          skillProfile: flags["skill-profile"],
         });
 
         const suffix =
@@ -65,6 +69,9 @@ export default class LoginCommand extends BaseCommand {
                 ? " (reused saved account name)"
               : " (inferred from auth email)";
         this.log(`Saved current Codex auth tokens as "${savedName}"${suffix}.`);
+        if (flags["skill-profile"]) {
+          this.log(`Attached skill profile "${flags["skill-profile"]}".`);
+        }
       } catch (error) {
         if (autoSwitchWasEnabled) {
           try {
