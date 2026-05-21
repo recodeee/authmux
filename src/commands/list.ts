@@ -2,6 +2,7 @@ import { Flags } from "@oclif/core";
 import prompts from "prompts";
 import { BaseCommand } from "../lib/base-command";
 import { formatAccountType } from "../lib/accounts/plan-display";
+import { listClaudeAccounts } from "../lib/accounts/claude-health";
 import {
   fetchLatestNpmVersionCached,
   formatGlobalInstallCommand,
@@ -36,10 +37,11 @@ export default class ListCommand extends BaseCommand {
       }
 
       const accounts = await this.accounts.listAccountMappings({ refreshUsage: "missing" });
+      const claudeAccounts = listClaudeAccounts();
 
-      this.emit({ accounts, detailed }, (payload) => {
-        if (!payload.accounts.length) {
-          this.log("No saved Codex accounts yet. Run `authmux save <name>`.");
+      this.emit({ accounts, claudeAccounts, detailed }, (payload) => {
+        if (!payload.accounts.length && !payload.claudeAccounts.length) {
+          this.log("No saved accounts yet. Run `authmux save <name>` or `authmux parallel --add <name>`.");
           return;
         }
 
@@ -58,6 +60,20 @@ export default class ListCommand extends BaseCommand {
           this.log(
             `    type=${formatAccountType(account.planType)} plan=${account.planType ?? "-"} skillProfile=${account.skillProfile ?? "-"} usage=${account.usageSource ?? "-"} 5h=${this.formatRemaining(account.remaining5hPercent)} weekly=${this.formatRemaining(account.remainingWeeklyPercent)} lastUsageAt=${account.lastUsageAt ?? "-"}`,
           );
+        }
+
+        if (payload.claudeAccounts.length > 0) {
+          if (payload.accounts.length > 0) this.log("");
+          this.log("Claude Code accounts:");
+          for (const ca of payload.claudeAccounts) {
+            const status = ca.healthy ? "✓" : "✗";
+            const expiry = ca.expiresAt
+              ? `expires=${new Date(ca.expiresAt).toISOString().slice(0, 10)}`
+              : "no-token";
+            this.log(
+              `  ${status} ${ca.name}  type=${ca.subscriptionType}  ${expiry}`,
+            );
+          }
         }
       });
     });
