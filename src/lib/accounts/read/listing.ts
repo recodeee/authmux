@@ -156,20 +156,33 @@ export async function listAccountMappings(
 }
 
 export async function getCurrentAccountName(): Promise<string | null> {
-  const sessionAccountName = await getActiveSessionAccountName();
+  let sessionAccountName: string | null = null;
+  try {
+    sessionAccountName = await getActiveSessionAccountName();
+  } catch {
+    sessionAccountName = null;
+  }
   if (sessionAccountName) {
     const sessionSnapshotPath = accountFilePath(sessionAccountName);
     if (await pathExists(sessionSnapshotPath)) {
       return sessionAccountName;
     }
 
-    await clearSessionAccountName();
+    try {
+      await clearSessionAccountName();
+    } catch {
+      // Listing/current resolution is read-side; stale session cleanup is best-effort.
+    }
   }
 
   const currentNamePath = resolveCurrentNamePath();
   const currentName = await readCurrentNameFile(currentNamePath);
   if (currentName) {
-    await setSessionAccountName(currentName);
+    try {
+      await setSessionAccountName(currentName);
+    } catch {
+      // Session pinning is an optimization; do not break read-only callers.
+    }
     return currentName;
   }
 
@@ -188,7 +201,11 @@ export async function getCurrentAccountName(): Promise<string | null> {
   const base = path.basename(resolvedTarget);
   if (!base.endsWith(".json") || base === "registry.json") return null;
   const resolvedName = base.replace(/\.json$/i, "");
-  await setSessionAccountName(resolvedName);
+  try {
+    await setSessionAccountName(resolvedName);
+  } catch {
+    // Session pinning is an optimization; do not break read-only callers.
+  }
   return resolvedName;
 }
 

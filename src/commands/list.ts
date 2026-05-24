@@ -14,6 +14,8 @@ import {
 } from "../lib/update-check";
 
 export default class ListCommand extends BaseCommand {
+  protected readonly syncExternalAuthBeforeRun = false;
+
   static description = "List accounts managed under ~/.codex";
 
   static flags = {
